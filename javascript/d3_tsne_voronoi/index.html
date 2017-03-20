@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<!-- original from https://bl.ocks.org/Fil/2dc296af097cd26242b52105e06763d8
+     This version by Evan Raskob https://github.com/pixelpusher/Data_Walking_Experiments/ 
+     Try running a simple python web server to see the example locally:
+     In a terminal:
+
+     cd javascript
+     python -m SimpleHTTPServer 8000
+
+     Then open a browser to http://localhost:8000
+-->
+<head>
+  <meta charset="utf-8">
+  <!-- <script src="https://d3js.org/d3.v4.min.js"></script> -->
+  <script src="../common/d3.v4.min.js"></script>
+  <script src="https://d3js.org/d3-geo.v1.min.js"></script>
+  <script src="https://d3js.org/d3-geo-projection.v1.min.js"></script>
+  <!-- <script src="../common/tsne.min.js"></script> -->
+ 
+  <style>
+    body { margin:0;position:fixed;top:0;right:0;bottom:0;left:0; }
+  </style>
+</head>
+
+<body>
+  <script> 
+const width = 400,
+    x = d3.scaleLinear()
+    .domain([-1, 1])
+    .range([0, width]),
+    area = d3.area()
+       .x((d,i) => i)
+       .y0(width+90)
+       .y1((d,i) => width + 90 - parseInt(3 * d||0));
+
+
+d3.queue()
+    .defer(d3.text, '../common/tsne.min.js')
+    .defer(d3.text, 'worker.js')
+    .defer(d3.csv, "../data/11_Nov_selected.csv")
+    .await(function (err, t, w, walkdata) {
+
+        var projection = d3.geoAlbers();
+        
+        console.log("project: " + projection([-122,37]));
+        //console.log(t + ", " + w);
+        
+        const worker = new Worker(window.URL.createObjectURL(new Blob([t + w], {
+            type: "text/javascript"
+        })));
+        
+
+        //DEBUG
+        // console.log( d3.keys(walkdata[0]));
+
+        const dustExtent = d3.extent( walkdata, function(d) {
+          return (+d.dust);
+        });
+        const mq135Range = d3.extent(walkdata, function(wd) 
+          { return wd["MQ135 value"]; }
+        );
+
+
+        // DEBUG
+        // console.log(dustExtent);
+        
+        const data = walkdata.map(function (d,i) {
+          let dustNum = +d.dust;
+          return {
+              lat : +d["latitude"]/100.0,
+              lon : +d["longitude"]*50.0,
+              mq135 : (mq135Range[0]-d["MQ135 value"])/mq135Range[1],
+              //mq2 : +d["MQ2 value"],
+              dust : (dustNum-dustExtent[0])/dustExtent[1]
+          };
+        });
+       const newdata = [];
+       data.forEach(function (d) {
+           newdata.push([d.lat, d.lon, d.mq135, d.dust]);
+       });
+
+        // DEBUG
+        console.log(data[0]);
+        console.log(projection([data[0].lat, data[0].lon]));
+/*
+       let model = new TSNE({
+          dim: 2,
+          perplexity: 30.0,
+          earlyExaggeration: 4.0,
+          learningRate: 100.0,
+          nIter: 500,
+          metric: 'euclidean'
+        });
+
+        model.init({
+          data: newdata,
+          type: 'dense'
+        });
+*/
+
+        const svg = d3.select('body').append('svg')
+            .attr('width', width + 100)
+            .attr('height', width + 100);
+        
+        const polygons = svg.selectAll('path')
+            .data(data)
+            .enter()
+            .append('path')
+            .attr('d', null)
+            .attr('stroke-width', 0.3)
+            .attr('fill', d => d3.rgb(d.dust * 255, d.dust * 255, 100))
+            .attr('stroke', d => d3.rgb(255,255,255))
+            .attr('opacity', d => 0.5 + 0.5 *d.mq135);
+
+        const cost = svg.append('path')
+            .attr('fill', '#aaa');
+        
+
+        //let pos = data.map(d => projection([d.lat, d.lon]));
+        let pos = data.map(d => [Math.random() - 0.5, Math.random() - 0.5]);
+        let costs = [];
+
+        const voronoi = d3.voronoi().extent([[-1, -1], [1, 1]]);
+
+        const timer = d3.timer(function () {
+            let p = voronoi.polygons(pos);
+            polygons.attr('d', (d, i) => p[i] ? "M" + (p[i]).map(d => d.map(x)).join("L") + "Z" : null);
+          cost.attr('d', area(costs));
+        });
+
+/*
+model.on('progressData', function(p){
+    pos = p;
+});
+
+model.on('progressStatus', function (e){
+    console.log(e);
+});
+
+model.on('progressIter', function (iter) {
+    if (iter[0] >= 499) timer.stop();
+    let currentCost = iter[1];
+    costs[iter[0]] = currentCost;
+});
+
+
+let [error, iter] = model.run();
+*/
+
+        worker.onmessage = function (e) {
+            //console.log("msg: " + e);
+            if (e.data.pos) pos = e.data.pos;
+            if (e.data.iterations) {
+              costs[e.data.iterations] = e.data.cost;
+              if (e.data.iterations >= 599) timer.stop();
+            }
+        };
+        //console.log("wheeee");                
+        worker.postMessage({
+            nIter: 600,
+            dim: 2,
+            perplexity: 30.0,
+            // earlyExaggeration: 4.0,
+            learningRate: 40.0,
+            // metric: 'euclidean',
+            data: newdata
+        });
+
+    });
+  </script>
+</body>
